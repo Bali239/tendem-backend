@@ -1,33 +1,37 @@
-import jwt from "jsonwebtoken";
+import { createHash, randomBytes } from "node:crypto";
+import Session from "../models/Session.js";
 
-const COOKIE_NAME = "chat_token";
+const configuredTtlDays = Number(process.env.SESSION_TTL_DAYS);
+const sessionTtlDays = Number.isFinite(configuredTtlDays) && configuredTtlDays > 0
+  ? configuredTtlDays
+  : 7;
+const SESSION_TTL_MS = sessionTtlDays * 24 * 60 * 60 * 1000;
 
-function signToken(userId) {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error("JWT_SECRET must contain at least 32 characters");
-  }
-  return jwt.sign({ sub: userId }, secret, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d"
-  });
+function hashToken(token) {
+  return createHash("sha256").update(token).digest("hex");
 }
 
-function verifyToken(token) {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error("JWT_SECRET must contain at least 32 characters");
-  }
-  return jwt.verify(token, secret);
+async function createSession(userId) {
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  await Session.create({ tokenHash: hashToken(token), user: userId, expiresAt });
+  return { token, expiresAt };
 }
 
-function setAuthCookie(response, token) {
-  response.cookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    path: "/"
-  });
+async function findSession(token) {
+  if (!token || typeof token !== "string" || token.length > 256) return null;
+  return Session.findOne({ tokenHash: hashToken(token), expiresAt: { $gt: new Date() } });
 }
 
-export { COOKIE_NAME, signToken, verifyToken, setAuthCookie };
+async function deleteSession(token) {
+  if (!token || typeof token !== "string" || token.length > 256) return;
+  await Session.deleteOne({ tokenHash: hashToken(token) });
+}
+
+function getBearerToken(request) {
+  const authorization = request.get("authorization") || "";
+  const match = /^Bearer\s+([A-Za-z0-9_-]+)$/i.exec(authorization);
+  return match?.[1] || null;
+}
+
+export { createSession, findSession, deleteSession, getBearerToken };

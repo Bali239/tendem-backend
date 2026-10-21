@@ -1,25 +1,17 @@
-import { COOKIE_NAME, verifyToken } from "../utils/auth.js";
 import User from "../models/User.js";
-import jwt from "jsonwebtoken";
 import { ApiError } from "../utils/apiError.js";
+import { findSession, getBearerToken } from "../utils/auth.js";
 
 async function requireAuth(request, response, next) {
   try {
-    const token = request.cookies[COOKIE_NAME];
-    if (!token) {
-      return next(new ApiError(401, "Authentication required"));
-    }
-    const payload = verifyToken(token);
-    const user = await User.findById(payload.sub).select("name email avatar");
-    if (!user) {
-      return next(new ApiError(401, "Authentication required"));
-    }
+    const session = await findSession(getBearerToken(request));
+    if (!session) return next(new ApiError(401, "Authentication required"));
+    const user = await User.findById(session.user).select("name email avatar");
+    if (!user) return next(new ApiError(401, "Authentication required"));
     request.user = user;
+    request.session = session;
     return next();
   } catch (error) {
-    if (error instanceof jwt.JsonWebTokenError || error instanceof jwt.TokenExpiredError) {
-      return next(new ApiError(401, "Authentication required"));
-    }
     return next(error);
   }
 }
